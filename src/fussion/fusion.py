@@ -9,11 +9,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 class CrossAttentionLayer(nn.Module):
     """Cross-attention: query from LLM hidden, key/value from encoder tokens."""
-    def __init__(self, d_model, nhead=4):
+    def __init__(self, d_model, nhead=4, dtype=None):
         super().__init__()
-        self.norm = nn.LayerNorm(d_model)
-        self.attn = nn.MultiheadAttention(d_model, nhead, batch_first=True)
-        nn.init.zeros_(self.attn.out_proj.weight)
+        self.norm = nn.LayerNorm(d_model, dtype=dtype)
+        self.attn = nn.MultiheadAttention(d_model, nhead, batch_first=True, dtype=dtype)
 
     def forward(self, x, visual_tokens):
         residual = x
@@ -44,7 +43,7 @@ class FusionLLM(nn.Module):
     """Frozen LLM with inserted cross-attention fusion layers every K layers."""
 
     def __init__(self, llm_name="gpt2", encoder_dim=512, every_k_layers=4,
-                 nhead=4, device=None, verbose=False):
+                 nhead=4, device=None, verbose=False, llm_kwargs=None):
         super().__init__()
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.every_k = every_k_layers
@@ -53,23 +52,26 @@ class FusionLLM(nn.Module):
         self.tok = AutoTokenizer.from_pretrained(llm_name)
         self.tok.pad_token = self.tok.eos_token or self.tok.pad_token
 
-        self.llm = AutoModelForCausalLM.from_pretrained(llm_name).to(self.device)
+        load_kwargs = dict(llm_kwargs or {})
+        if "torch_dtype" not in load_kwargs:
+            load_kwargs["torch_dtype"] = torch.float32
+        self.llm = AutoModelForCausalLM.from_pretrained(llm_name, **load_kwargs).to(self.device)
         self.llm.eval()
         for p in self.llm.parameters():
             p.requires_grad = False
+        self.llm_dtype = next(self.llm.parameters()).dtype
 
         cfg = self.llm.config
         self.d_model = getattr(cfg, "hidden_size", None) or getattr(cfg, "n_embd", None) or 768
         self.llm_name = llm_name
         self.vocab_size = cfg.vocab_size
 
-        self.visual_proj = nn.Linear(encoder_dim, self.d_model, bias=False)
-        nn.init.zeros_(self.visual_proj.weight)
+        self.visual_proj = nn.Linear(encoder_dim, self.d_model, dtype=self.llm_dtype, bias=False)
 
         layers = self._get_layers()
         self.wrapped_layers = nn.ModuleList()
         for i in range(len(layers)):
-            ca = CrossAttentionLayer(self.d_model, nhead) if i % every_k_layers == 0 else None
+            ca = CrossAttentionLayer(self.d_model, nhead, dtype=self.llm_dtype) if i % every_k_layers == 0 else None
             wl = WrappedLayer(layers[i], ca)
             self.wrapped_layers.append(wl)
             layers[i] = wl
@@ -100,8 +102,7 @@ class FusionLLM(nn.Module):
     def forward(self, input_ids, visual_tokens, labels=None, attention_mask=None):
         B, T = input_ids.shape
         N = visual_tokens.shape[1]
-        llm_dtype = next(self.llm.parameters()).dtype
-        visual = self.visual_proj(visual_tokens).to(llm_dtype)
+        visual = self.visual_proj(visual_tokens).to(self.llm_dtype)
         embeds = self.llm.get_input_embeddings()(input_ids)
         combined = torch.cat([visual, embeds], dim=1)
         vis_mask = torch.ones(B, N, dtype=torch.long, device=self.device)
@@ -127,8 +128,7 @@ class FusionLLM(nn.Module):
     @torch.no_grad()
     def generate(self, visual_tokens, prompt="", max_new=50, temperature=0.8,
                  top_p=0.9, repetition_penalty=1.0):
-        llm_dtype = next(self.llm.parameters()).dtype
-        visual = self.visual_proj(visual_tokens).to(llm_dtype)
+        visual = self.visual_proj(visual_tokens).to(self.llm_dtype)
 
         for wl in self.wrapped_layers:
             if wl.cross_attn is not None:

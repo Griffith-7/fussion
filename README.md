@@ -9,10 +9,11 @@
 
 Two approaches:
 
-| Approach | Method | PPL | Params | Speed |
-|---|---|---|---|---|
-| **Bridge** | External MLP between encoder and LLM input | 1.94 | 1.0 M | 201s |
-| **Fusion** | Cross-attention layers inside the LLM | **1.00** | 7.5 M | **168s** |
+| Approach | LLM | Method | PPL | Params | Train Time |
+|---|---|---|---|---|---|
+| **Bridge** | GPT-2 (124M) | External MLP | 1.94 | 1.0 M | 201s |
+| **Fusion** | GPT-2 (124M) | Cross-attention inside LLM | **1.00** | 7.5 M | **168s** |
+| **Fusion** | **TinyLlama 1.1B** | Cross-attention inside LLM | **1.09** | **101.8 M** | 465s |
 
 ---
 
@@ -70,13 +71,14 @@ Encoder ──▶ Proj ──▶ [LLM Layer 0] ──▶ XAttn ──▶ [Layer 
 
 ### Full Results
 
-| Modality | Encoder | Approach | Val PPL | Params | Train Time |
-|---|---|---|---|---|---|
-| Image | CLIP | Bridge (MLP) | 1.94 | 1,048,576 | 201s |
-| Image | CLIP | **Fusion** | **1.00** | 7,484,928 | **168s** |
-| Video | VideoEncoder | **Fusion** | **1.16** | 7,484,928 | 31s |
-| Code | CodeBERT | **Fusion** | **2.41** | 7,681,536 | 28s |
-| Text | GPT-2 | **Fusion** | **1.00** | 7,681,536 | 28s |
+| Modality | Encoder | LLM | Approach | Val PPL | Params | Train Time |
+|---|---|---|---|---|---|---|
+| Image | CLIP | GPT-2 (124M) | Bridge (MLP) | 1.94 | 1,048,576 | 201s |
+| Image | CLIP | GPT-2 (124M) | **Fusion** | **1.00** | 7,484,928 | 168s |
+| Image | CLIP | **TinyLlama (1.1B)** | **Fusion** | **1.09** | **101,785,600** | **465s** |
+| Video | VideoEncoder | GPT-2 (124M) | **Fusion** | **1.16** | 7,484,928 | 31s |
+| Code | CodeBERT | GPT-2 (124M) | **Fusion** | **2.41** | 7,681,536 | 28s |
+| Text | GPT-2 | GPT-2 (124M) | **Fusion** | **1.00** | 7,681,536 | 28s |
 
 ### Bridge Type Comparison (CLIP → GPT-2, 20 steps)
 
@@ -172,7 +174,7 @@ Train a FusionLLM model.
 
 ## How It Works
 
-1. **Zero-initialized projection** — All bridges start with zero weights. The LLM sees zeros initially, so training starts from the LLM's baseline behavior. Gradients then push weights away from zero.
+1. **Zero-initialized bridge** — External bridges start with zero weights so the LLM sees zeros initially, starting from its natural language distribution. (Fusion's visual projection uses default init since cross-attention layers need non-zero inputs to learn.)
 
 2. **20-step fine-tune** — AdamW + cosine LR on the bridge/fusion params. The frozen LLM provides a stationary loss landscape.
 
@@ -184,13 +186,14 @@ Train a FusionLLM model.
 
 ## Memory Scaling
 
-| Approach | LLM Size | VRAM | Method |
-|---|---|---|---|
-| Bridge (CPU) | any | 0 GB | `device="cpu"` |
-| Bridge (GPU) | 124M | ~0.5 GB | MLP only on GPU |
-| Bridge (GPU) | 1.5B | ~4 GB | MLP + LLM on GPU |
-| Fusion (CPU) | 124M | 0 GB | Wrapped layers |
-| Fusion (GPU) | 124M | ~1 GB | Cross-attn on GPU |
+| Approach | LLM Size | VRAM | Train Time (15 steps) | Method |
+|---|---|---|---|---|
+| Bridge (CPU) | any | 0 GB | — | `device="cpu"` |
+| Bridge (GPU) | 124M | ~0.5 GB | — | MLP only on GPU |
+| Bridge (GPU) | 1.5B | ~4 GB | — | MLP + LLM on GPU |
+| Fusion (CPU) | 124M | 0 GB | 168s (20 steps) | Wrapped layers |
+| Fusion (CPU) | **1.1B** | **0 GB** | **465s** (15 steps) | **Verified ✓** |
+| Fusion (GPU) | 124M | ~1 GB | ~3s (est.) | Cross-attn on GPU |
 
 ---
 
@@ -199,7 +202,7 @@ Train a FusionLLM model.
 - **Synthetic data** — Benchmarks use synthetic shape/code datasets. Real-world performance depends on encoder quality.
 - **Repetition** — Without EOS tokens in training data, generation can repeat. Add `<|endoftext|>` to captions for proper stopping.
 - **Retrieval** — Next-token prediction does NOT align embedding spaces for retrieval. Use contrastive loss for that.
-- **Large LLMs** — Fusion wraps individual transformer layers, which is LLM-architecture specific. Currently supports GPT-2 and LLaMA-style models.
+- **Large LLMs** — Fusion with TinyLlama 1.1B verified (PPL 1.09, 465s on CPU). Supports GPT-2 and LLaMA-style models.
 - **CPU training** — All benchmarks on CPU. GPU will be ~50-100x faster.
 
 ---
@@ -208,24 +211,38 @@ Train a FusionLLM model.
 
 ```
 fussion/
-├── src/fussion/
-│   ├── __init__.py       # Package init
-│   ├── bridge.py         # Bridge architectures (Linear, MLP, Transformer)
-│   ├── merger.py         # CrossModalMerger (external bridge)
-│   ├── fusion.py         # FusionLLM (internal cross-attention)
-│   ├── encoders.py       # CLIP, Whisper, Video, CodeBERT, Text encoders
-│   └── datasets.py       # Dataset generators
+├── .gitignore
+├── LICENSE
+├── Makefile                        # make test / make bench / make chart
+├── README.md
+├── pyproject.toml                  # Pip-installable package + CLI entrypoint
+├── examples/
+│   ├── bridge_quickstart.py        # External bridge (CLIP → GPT-2)
+│   ├── fusion_quickstart.py        # Internal fusion (CLIP → GPT-2)
+│   ├── generate.py                 # Image caption generation
+│   └── code_to_text.py             # Swap encoder to CodeBERT
 ├── benchmarks/
-│   ├── run.py            # Run all benchmarks
-│   ├── plot.py           # Generate charts
+│   ├── __init__.py
+│   ├── run.py                      # Reproduce all benchmarks
+│   ├── plot.py                     # Generate chart images
 │   ├── benchmark_chart.png
 │   └── training_curve.png
-├── tests/
-│   └── test_all.py       # Unit tests
-├── README.md
-├── pyproject.toml
-├── requirements.txt
-└── LICENSE
+├── src/fussion/
+│   ├── __init__.py                 # Public API exports
+│   ├── __main__.py                 # python -m fussion
+│   ├── cli.py                      # CLI commands
+│   ├── bridge.py                   # Linear/MLP/Transformer projections
+│   ├── fusion.py                   # FusionLLM + cross-attention training
+│   ├── merger.py                   # CrossModalMerger (external bridge)
+│   ├── encoders.py                 # CLIP, Whisper, Video, CodeBERT, Text
+│   └── datasets.py                 # Synthetic dataset generators
+└── tests/
+    ├── __init__.py
+    ├── test_bridge.py
+    ├── test_datasets.py
+    ├── test_encoders.py
+    ├── test_fusion.py
+    └── test_merger.py
 ```
 
 ---
