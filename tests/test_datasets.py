@@ -1,6 +1,5 @@
 """Tests for datasets module."""
 
-import pytest
 from fussion import datasets
 
 

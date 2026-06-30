@@ -2,9 +2,7 @@
 
 import os
 import torch
-import pytest
 from fussion import merger
-from fussion.exceptions import BridgeNotFoundError
 
 
 class TestCrossModalMergerInit:

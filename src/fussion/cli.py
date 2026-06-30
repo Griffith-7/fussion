@@ -6,9 +6,9 @@ import sys
 
 import torch
 
-from .exceptions import BridgeNotFoundError, EncoderNotFoundError
 from .datasets import make_shape_dataset
 from .encoders import get_encoder, list_modalities
+from .exceptions import BridgeNotFoundError, EncoderNotFoundError
 from .fusion import FusionLLM, train_fusion
 from .merger import CrossModalMerger
 

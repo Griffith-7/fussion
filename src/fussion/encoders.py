@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from .exceptions import EncoderNotFoundError, EncoderError
+from .exceptions import EncoderError, EncoderNotFoundError
 
 __all__ = [
     "ModalityEncoder",

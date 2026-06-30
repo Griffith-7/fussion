@@ -2,7 +2,7 @@
 
 import logging
 import random
-from typing import Dict, List, Tuple, Callable
+from typing import Callable, Dict, List, Tuple
 
 from PIL import Image, ImageDraw
 
