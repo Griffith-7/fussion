@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fussion"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cross-modal fusion: connect any encoder to any frozen LLM"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -17,9 +17,31 @@ dependencies = [
     "numpy",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0", "pytest-timeout>=2.0.0"]
+dev-all = ["pytest>=7.0.0", "pytest-timeout>=2.0.0", "ruff>=0.1.0"]
+
 [project.scripts]
 fussion = "fussion.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["fussion*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (GPU heavy, skip with -m 'not slow')",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = ["benchmarks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N"]
+ignore = ["E501", "N803", "N806", "N812", "W293"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["N", "I", "E402", "F541", "E701", "E702"]
